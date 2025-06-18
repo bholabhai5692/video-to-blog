@@ -15,11 +15,10 @@ class YTToBlogCoherePro {
         add_action('admin_post_generate_blog_post_pro', [$this, 'handle_form']);
         add_action('wp_ajax_ytb_generate_preview', [$this, 'ajax_generate_preview']);
         add_action('wp_ajax_nopriv_ytb_generate_preview', [$this, 'ajax_generate_preview']);
-        $this->ensure_assets_exist();
     }
 
     public function admin_menu() {
-        add_menu_page("YT2Blog AI Pro", "YT2Blog AI Pro", "manage_options", "yt-to-blog-ai-pro", [$this, 'plugin_page'], 'dashicons-media-document', 99);
+        add_menu_page("YT2Blog AI Pro", "YT2Blog AI Pro", "manage_options", "yt-to-blog-ai-pro", [$this, 'plugin_page'], null, 99);
     }
 
     public function load_assets() {
@@ -38,7 +37,7 @@ class YTToBlogCoherePro {
             <form id="ytb-form-pro" method="POST" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
                 <input type="hidden" name="action" value="generate_blog_post_pro" />
                 <label><b>YouTube URL:</b></label><br>
-                <input type="url" name="youtube_url" id="youtube_url" required style="width: 60%;" /><br><br>
+                <input type="text" name="youtube_url" id="youtube_url" required style="width: 60%;" /><br><br>
                 <label><b>Cohere API Key:</b></label><br>
                 <input type="text" name="cohere_api_key" id="cohere_api_key" required style="width: 60%;" /><br><br>
                 <button type="button" id="ytb-preview-btn" class="button button-secondary">Preview Blog</button>
@@ -78,12 +77,15 @@ class YTToBlogCoherePro {
         $result = $this->generate_blog_content($video_url, $cohere_api_key);
 
         if ($result['success']) {
+            $title = $result['title'];
+            $content = $result['content'];
+
             $post_id = wp_insert_post([
-                'post_title'   => $result['title'],
-                'post_content' => $result['content'],
+                'post_title'   => $title,
+                'post_content' => $content,
                 'post_status'  => 'publish',
                 'post_author'  => get_current_user_id(),
-                'tags_input'   => [$result['title']],
+                'tags_input'   => [$title],
                 'post_category'=> [1]
             ]);
             wp_redirect(admin_url("admin.php?page=yt-to-blog-ai-pro&success=1"));
@@ -94,14 +96,12 @@ class YTToBlogCoherePro {
     }
 
     private function generate_blog_content($video_url, $cohere_api_key, $preview_only = false) {
-        preg_match('#(?:v=|youtu\.be/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})#', $video_url, $matches);
+        preg_match('#(?:v=|youtu\\.be/|youtube\\.com\\/embed\\/)([a-zA-Z0-9_-]{11})#', $video_url, $matches);
         $video_id = $matches[1] ?? null;
         if (!$video_id) return ['success'=>false, 'error'=>'Invalid YouTube URL'];
 
         $api_url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$video_id&format=json";
         $response = wp_remote_get($api_url);
-        if (is_wp_error($response)) return ['success'=>false, 'error'=>'Failed to fetch video title'];
-
         $data = json_decode(wp_remote_retrieve_body($response), true);
         $title = sanitize_text_field($data['title'] ?? 'YouTube Blog');
         $focus_keyword = $title;
@@ -121,6 +121,7 @@ Focus on SEO tips, use the focus keyword, and ensure the content is unique, valu
                 'Authorization' => 'Bearer ' . $cohere_api_key,
                 'Content-Type' => 'application/json'
             ],
+            'timeout' => 20,
             'body' => json_encode([
                 'model' => 'command-r-plus',
                 'prompt' => $prompt,
@@ -147,82 +148,17 @@ Focus on SEO tips, use the focus keyword, and ensure the content is unique, valu
 
     private function google_images($keyword, $limit = 5) {
         $keyword = urlencode($keyword);
+        $user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
         $url = "https://www.google.com/search?q=$keyword&tbm=isch";
-        $response = wp_remote_get($url, ['headers' => ['User-Agent' => 'Mozilla/5.0'], 'timeout' => 10]);
-
-        if (is_wp_error($response)) return [];
-
+        $args = [
+            'headers' => ['User-Agent' => $user_agent],
+            'timeout' => 10
+        ];
+        $response = wp_remote_get($url, $args);
         $body = wp_remote_retrieve_body($response);
-        preg_match_all('/"ou":"([^"]+)"/', $body, $matches);
-        return array_slice(array_unique($matches[1]), 0, $limit);
-    }
-
-    private function ensure_assets_exist() {
-        $css = __DIR__ . '/css/style-pro.css';
-        $js = __DIR__ . '/js/script-pro.js';
-
-        if (!file_exists($css)) {
-            wp_mkdir_p(dirname($css));
-            file_put_contents($css, <<<EOT
-#progress-bar-pro {width:100%;background:#f2f2f2;height:20px;border-radius:8px;overflow:hidden;margin:20px 0;display:none;}
-#progress-bar-pro .bar {height:100%;width:0;background:#0a9cfc;transition:width 0.5s;}
-#ytb-live-preview {margin-top:30px;}
-EOT);
-        }
-
-        if (!file_exists($js)) {
-            wp_mkdir_p(dirname($js));
-            file_put_contents($js, <<<EOT
-jQuery(document).ready(function($){
-    function setProgress(pct){
-        $('#progress-bar-pro').show();
-        $('#progress-bar-pro .bar').css('width', pct+'%');
-    }
-    $('#ytb-preview-btn').click(function(e){
-        e.preventDefault();
-        setProgress(10);
-        $('#ytb-live-preview').hide();
-        $('#ytb-create-btn').prop('disabled',true);
-        var url = $('#youtube_url').val();
-        var key = $('#cohere_api_key').val();
-        if(!url || !key) { alert('Please enter YouTube URL and Cohere API Key'); setProgress(0); return; }
-        setProgress(30);
-        $.ajax({
-            url: ytbProAjax.ajax_url,
-            type: 'POST',
-            dataType: 'json',
-            data: {
-                action: 'ytb_generate_preview',
-                youtube_url: url,
-                cohere_api_key: key,
-                nonce: ytbProAjax.nonce
-            },
-            success: function(resp){
-                setProgress(100);
-                if(resp.success){
-                    $('#ytb-preview-content').html(resp.data.content);
-                    $('#ytb-live-preview').show();
-                    $('#ytb-create-btn').prop('disabled',false);
-                } else {
-                    $('#ytb-preview-content').html('<b style="color:red;">'+resp.data+'</b>');
-                    $('#ytb-live-preview').show();
-                    setProgress(0);
-                }
-            },
-            error: function(){
-                setProgress(0);
-                $('#ytb-preview-content').html('<b style="color:red;">Server error. Try again later.</b>');
-                $('#ytb-live-preview').show();
-            }
-        });
-    });
-    $('#ytb-form-pro').submit(function(){
-        setProgress(80);
-        $('#ytb-create-btn').prop('disabled',true);
-    });
-});
-EOT);
-        }
+        preg_match_all('/\"ou\":\"([^\"]+)\"/', $body, $matches);
+        $images = array_slice(array_unique($matches[1]), 0, $limit);
+        return $images ?: [];
     }
 }
 
