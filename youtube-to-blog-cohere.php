@@ -1,70 +1,136 @@
 <?php
 /*
-Plugin Name: YouTube to Blog with Cohere AI
-Description: Converts YouTube videos into SEO-optimized blog posts using Cohere AI.
-Version: 1.0
-Author: Your Name
+Plugin Name: YouTube to SEO Blog with Cohere AI (Pro)
+Description: Converts YouTube videos into 1000+ word SEO-optimized blog posts with images, keyword focus, progress bar, and live preview, using Cohere AI.
+Version: 2.0
+Author: AI Copilot
 */
 
 defined('ABSPATH') || exit;
 
-class YTToBlogCohere {
+class YTToBlogCoherePro {
     public function __construct() {
         add_action('admin_menu', [$this, 'admin_menu']);
         add_action('admin_enqueue_scripts', [$this, 'load_assets']);
-        add_action('admin_post_generate_blog_post', [$this, 'handle_form']);
+        add_action('admin_post_generate_blog_post_pro', [$this, 'handle_form']);
+        add_action('wp_ajax_ytb_generate_preview', [$this, 'ajax_generate_preview']);
+        add_action('wp_ajax_nopriv_ytb_generate_preview', [$this, 'ajax_generate_preview']);
     }
 
     public function admin_menu() {
-        add_menu_page("YT to Blog AI", "YT to Blog AI", "manage_options", "yt-to-blog-ai", [$this, 'plugin_page'], null, 99);
+        add_menu_page("YT2Blog AI Pro", "YT2Blog AI Pro", "manage_options", "yt-to-blog-ai-pro", [$this, 'plugin_page'], null, 99);
     }
 
     public function load_assets() {
-        wp_enqueue_style('ytb-style', plugin_dir_url(__FILE__) . 'css/style.css');
-        wp_enqueue_script('ytb-script', plugin_dir_url(__FILE__) . 'js/script.js', ['jquery'], null, true);
+        wp_enqueue_style('ytb-style-pro', plugin_dir_url(__FILE__) . 'css/style-pro.css');
+        wp_enqueue_script('ytb-script-pro', plugin_dir_url(__FILE__) . 'js/script-pro.js', ['jquery'], null, true);
+        wp_localize_script('ytb-script-pro', 'ytbProAjax', [
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('ytbproajaxnonce')
+        ]);
     }
 
     public function plugin_page() {
         ?>
         <div class="wrap">
-            <h1>YouTube to Blog using Cohere AI</h1>
-            <form id="ytb-form" method="POST" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-                <input type="hidden" name="action" value="generate_blog_post" />
-                <label>YouTube URL:</label><br>
-                <input type="text" name="youtube_url" required style="width: 50%;" /><br><br>
-                <label>Cohere API Key:</label><br>
-                <input type="text" name="cohere_api_key" required style="width: 50%;" /><br><br>
-                <input type="submit" class="button button-primary" value="Generate Blog Post" />
-                <div id="progress-bar"><div class="bar"></div></div>
+            <h1>YouTube to SEO Blog (Cohere AI Powered)</h1>
+            <form id="ytb-form-pro" method="POST" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+                <input type="hidden" name="action" value="generate_blog_post_pro" />
+                <label><b>YouTube URL:</b></label><br>
+                <input type="text" name="youtube_url" id="youtube_url" required style="width: 60%;" /><br><br>
+                <label><b>Cohere API Key:</b></label><br>
+                <input type="text" name="cohere_api_key" id="cohere_api_key" required style="width: 60%;" /><br><br>
+                <button type="button" id="ytb-preview-btn" class="button button-secondary">Preview Blog</button>
+                <input type="submit" class="button button-primary" value="Create Blog Post" id="ytb-create-btn" disabled />
+                <div id="progress-bar-pro"><div class="bar"></div></div>
             </form>
+            <div id="ytb-live-preview" style="background: #fff; border: 1px solid #ccc; margin-top: 30px; padding:20px; display:none;">
+                <h2>Blog Live Preview</h2>
+                <div id="ytb-preview-content"></div>
+            </div>
         </div>
         <?php
     }
 
+    /**
+     * AJAX Handler for Live Preview
+     */
+    public function ajax_generate_preview() {
+        check_ajax_referer('ytbproajaxnonce', 'nonce');
+        if (!current_user_can('manage_options')) wp_send_json_error('Unauthorized');
+
+        $video_url = sanitize_text_field($_POST['youtube_url']);
+        $cohere_api_key = sanitize_text_field($_POST['cohere_api_key']);
+
+        $result = $this->generate_blog_content($video_url, $cohere_api_key, true); // Preview only
+
+        if ($result['success']) {
+            wp_send_json_success(['content' => $result['content']]);
+        } else {
+            wp_send_json_error($result['error']);
+        }
+    }
+
+    /**
+     * Handles the form POST for actual blog post creation
+     */
     public function handle_form() {
         if (!current_user_can('manage_options')) wp_die("Unauthorized");
 
         $video_url = sanitize_text_field($_POST['youtube_url']);
         $cohere_api_key = sanitize_text_field($_POST['cohere_api_key']);
 
-        preg_match('#(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})#', $video_url, $matches);
-        $video_id = $matches[1] ?? null;
+        $result = $this->generate_blog_content($video_url, $cohere_api_key);
 
-        if (!$video_id || !$cohere_api_key) {
-            wp_redirect(admin_url("admin.php?page=yt-to-blog-ai&error=1"));
-            exit;
+        if ($result['success']) {
+            $title = $result['title'];
+            $content = $result['content'];
+
+            // Create Post
+            $post_id = wp_insert_post([
+                'post_title'   => $title,
+                'post_content' => $content,
+                'post_status'  => 'publish',
+                'post_author'  => get_current_user_id(),
+                'tags_input'   => [$title],
+                'post_category'=> [1]
+            ]);
+            wp_redirect(admin_url("admin.php?page=yt-to-blog-ai-pro&success=1"));
+        } else {
+            wp_redirect(admin_url("admin.php?page=yt-to-blog-ai-pro&error=" . urlencode($result['error'])));
         }
+        exit;
+    }
 
-        // Title from YouTube
+    /**
+     * Main blog content generation function
+     */
+    private function generate_blog_content($video_url, $cohere_api_key, $preview_only = false) {
+        // 1. Extract YouTube Video ID
+        preg_match('#(?:v=|youtu\.be/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})#', $video_url, $matches);
+        $video_id = $matches[1] ?? null;
+        if (!$video_id) return ['success'=>false, 'error'=>'Invalid YouTube URL'];
+
+        // 2. Get Video Title
         $api_url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$video_id&format=json";
         $response = wp_remote_get($api_url);
         $data = json_decode(wp_remote_retrieve_body($response), true);
         $title = sanitize_text_field($data['title'] ?? 'YouTube Blog');
+        $focus_keyword = $title;
 
-        // Generate blog via Cohere AI
-        $prompt = "Write a 1000+ word SEO-optimized blog post for this YouTube video titled: \"$title\". 
-Include the focus keyword \"$title\" at least 20 times. Make it readable, human-like and HTML friendly.";
+        // 3. Search for Related Images from Google
+        $image_urls = $this->google_images($focus_keyword, 5);
 
+        // 4. Prepare Prompt for Cohere
+        $prompt = "Write a detailed, 1000+ word SEO-optimized blog post for this YouTube video titled: \"$title\".
+Use the focus keyword \"$focus_keyword\" at least 20 times organically throughout the blog.
+Make the writing human-like, highly readable and HTML-formatted (with paragraphs, h2/h3 headings, bullets, etc).
+Use <img> tags for images, and make sure each image's alt attribute is \"$focus_keyword\".
+Add all provided images from this list in the blog, distributing them naturally: " . implode(", ", $image_urls) . ".
+Do not mention 'AI', 'Cohere', 'YouTube', or that this is AI-generated.
+Focus on SEO tips, use the focus keyword, and ensure the content is unique, valuable, and engaging for readers.";
+
+        // 5. Call Cohere AI
         $ai_response = wp_remote_post('https://api.cohere.ai/v1/generate', [
             'headers' => [
                 'Authorization' => 'Bearer ' . $cohere_api_key,
@@ -77,26 +143,114 @@ Include the focus keyword \"$title\" at least 20 times. Make it readable, human-
                 'temperature' => 0.7
             ])
         ]);
-
         $body = json_decode(wp_remote_retrieve_body($ai_response), true);
-        $description = wp_kses_post($body['generations'][0]['text'] ?? '');
 
-        // Get Thumbnail
+        if (empty($body['generations'][0]['text'])) {
+            return ['success'=>false, 'error'=>'Cohere AI did not return any text.'];
+        }
+        $description = wp_kses_post($body['generations'][0]['text']);
+
+        // 6. Add Video Thumbnail at Top
         $thumb = "https://img.youtube.com/vi/$video_id/hqdefault.jpg";
+        $content = "<img src='$thumb' alt='$focus_keyword' style='width:100%;max-width:600px;' /><br><br>" . $description;
 
-        // Create Post
-        $post_id = wp_insert_post([
-            'post_title'   => $title,
-            'post_content' => "<img src='$thumb' alt='$title' /><br><br>" . $description,
-            'post_status'  => 'publish',
-            'post_author'  => get_current_user_id(),
-            'tags_input'   => [$title],
-            'post_category'=> [1]
-        ]);
+        // 7. Add image credits (if needed)
+        // $content .= "<p><small>Image sources from Google Images</small></p>";
 
-        wp_redirect(admin_url("admin.php?page=yt-to-blog-ai&success=1"));
-        exit;
+        return ['success'=>true, 'title'=>$title, 'content'=>$content];
+    }
+
+    /**
+     * Get Google Images URLs by scraping (or use an API if available)
+     */
+    private function google_images($keyword, $limit = 5) {
+        $keyword = urlencode($keyword);
+        $user_agent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)';
+        $url = "https://www.google.com/search?q=$keyword&tbm=isch";
+        $args = [
+            'headers' => ['User-Agent' => $user_agent],
+            'timeout' => 10
+        ];
+        $response = wp_remote_get($url, $args);
+        $body = wp_remote_retrieve_body($response);
+        preg_match_all('/"ou":"([^"]+)"/', $body, $matches);
+        $images = array_slice(array_unique($matches[1]), 0, $limit);
+        return $images ?: [];
     }
 }
 
-new YTToBlogCohere();
+new YTToBlogCoherePro();
+
+/* ---------- CSS: css/style-pro.css ---------- */
+if (!file_exists(__DIR__ . '/css/style-pro.css')) {
+    @mkdir(__DIR__ . '/css', 0777, true);
+    file_put_contents(__DIR__ . '/css/style-pro.css', <<<EOT
+#progress-bar-pro {width:100%;background:#f2f2f2;height:20px;border-radius:8px;overflow:hidden;margin:20px 0;display:none;}
+#progress-bar-pro .bar {height:100%;width:0;background:#0a9cfc;transition:width 0.5s;}
+#ytb-live-preview {margin-top:30px;}
+EOT
+    );
+}
+/* ---------- JS: js/script-pro.js ---------- */
+if (!file_exists(__DIR__ . '/js/script-pro.js')) {
+    @mkdir(__DIR__ . '/js', 0777, true);
+    file_put_contents(__DIR__ . '/js/script-pro.js', <<<EOT
+jQuery(document).ready(function($){
+    function setProgress(pct){
+        $('#progress-bar-pro').show();
+        $('#progress-bar-pro .bar').css('width', pct+'%');
+    }
+    $('#ytb-preview-btn').click(function(e){
+        e.preventDefault();
+        setProgress(10);
+        $('#ytb-live-preview').hide();
+        $('#ytb-create-btn').prop('disabled',true);
+        var url = $('#youtube_url').val();
+        var key = $('#cohere_api_key').val();
+        if(!url || !key) { alert('Please enter YouTube URL and Cohere API Key'); setProgress(0); return; }
+        setProgress(30);
+        $.ajax({
+            url: ytbProAjax.ajax_url,
+            type: 'POST',
+            dataType: 'json',
+            data: {
+                action: 'ytb_generate_preview',
+                youtube_url: url,
+                cohere_api_key: key,
+                nonce: ytbProAjax.nonce
+            },
+            success: function(resp){
+                setProgress(100);
+                if(resp.success){
+                    $('#ytb-preview-content').html(resp.data.content);
+                    $('#ytb-live-preview').show();
+                    $('#ytb-create-btn').prop('disabled',false);
+                } else {
+                    $('#ytb-preview-content').html('<b style="color:red;">'+resp.data+'</b>');
+                    $('#ytb-live-preview').show();
+                    setProgress(0);
+                }
+            },
+            error: function(xhr){
+                setProgress(0);
+                $('#ytb-preview-content').html('<b style="color:red;">Server error. Try again later.</b>');
+                $('#ytb-live-preview').show();
+            }
+        });
+    });
+    $('#ytb-form-pro').submit(function(){
+        setProgress(80);
+        $('#ytb-create-btn').prop('disabled',true);
+    });
+});
+EOT
+    );
+}
+/* ------- End of plugin code and assets generation ------- */
+
+/*
+=== Instructions to ZIP the plugin: ===
+1. Place this PHP file, the generated css/style-pro.css, and js/script-pro.js in a folder named youtube-to-blog-cohere-pro
+2. Select the folder and create a ZIP: youtube-to-blog-cohere-pro.zip
+3. Upload the ZIP on your WordPress site Plugins > Add New > Upload Plugin
+*/
